@@ -1,5 +1,5 @@
 /*
-	    Copyright 2012 Bruno Carreira - Lucas Farias - Rafael Luna - Vin�cius Fonseca.
+	    Copyright 2015 Mike Burgher.
 
 		Licensed under the Apache License, Version 2.0 (the "License");
 		you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
    		limitations under the License.   			
  */
 
-package co.mwater.foregroundcameraplugin;
+package co.orionsys.autocamplugin;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.util.List;
 
 import android.app.Activity;
+import android.content.Context;
 import android.hardware.Camera;
 import android.hardware.Camera.AutoFocusCallback;
 import android.hardware.Camera.PictureCallback;
@@ -30,10 +31,9 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.util.Log;
-import android.view.View;
-import android.view.ViewGroup.LayoutParams;
-import android.widget.Button;
-import android.widget.LinearLayout;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.widget.FrameLayout;
 
 /**
  * Camera Activity Class. Configures Android camera to take picture and show it.
@@ -43,16 +43,44 @@ public class CameraActivity extends Activity {
 	private static final String TAG = "CameraActivity";
 
 	private Camera mCamera;
-	private CameraPreview mPreview;
-	private boolean pressed = false;
+	private ForegroundCameraPreview mPreview;
+    private FrameLayout mFrameLayout;
+    private int nCamID;
+    private int af;
+    private int cameraCount = 0;
+    private Camera.CameraInfo cameraInfo = new Camera.CameraInfo();
 
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
-		setContentView(getResources().getIdentifier("foregroundcameraplugin", "layout", getPackageName()));
+		setContentView(getResources().getIdentifier("autocamplugin", "layout", getPackageName()));
 
+		// Select the camera, default to primary
+		
+		nCamID = (int) getIntent().getIntExtra("cameraDirection",-1);
+		af = (int) getIntent().getIntExtra("sourceType",-1);
+	    cameraCount = Camera.getNumberOfCameras();
+	    if (nCamID == 1) {
+	    	for (int camIdx = 0; camIdx < cameraCount; camIdx++) {
+	            Camera.getCameraInfo(camIdx, cameraInfo);
+	            if (cameraInfo.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+	            	nCamID = camIdx;
+	            }
+	    	}
+	    } else if (nCamID == 0) {
+		    for (int camIdx = 0; camIdx < cameraCount; camIdx++) {
+		        Camera.getCameraInfo(camIdx, cameraInfo);
+		        if (cameraInfo.facing == Camera.CameraInfo.CAMERA_FACING_BACK) {
+		           nCamID = camIdx;
+		         }
+		   }
+		} else {
+			nCamID = 0;
+		}
+						
 		// Create an instance of Camera
-		mCamera = getCameraInstance();
+	    
+		mCamera = getCameraInstance(nCamID);
 
 		if (mCamera == null) {
 			setResult(RESULT_CANCELED);
@@ -73,49 +101,14 @@ public class CameraActivity extends Activity {
 	    }
 
 	    params.setPictureSize(w, h);
-	    params.setFlashMode(Camera.Parameters.FLASH_MODE_OFF);
-
+	    params.setFlashMode(Camera.Parameters.FLASH_MODE_OFF);   
 	    mCamera.setParameters(params);
-
+	    
 		// Create a Preview and set it as the content of activity.
-		mPreview = new CameraPreview(this);
-		mPreview.setCamera(mCamera);
-		
-		
-		LinearLayout preview = (LinearLayout)findViewById(getResources().getIdentifier("camera_preview", "id", getPackageName()));
-		preview.addView(mPreview, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
-		// Add a listener to the Capture button
-		Button captureButton = (Button) findViewById(getResources().getIdentifier("button_capture", "id", getPackageName()));
-		captureButton.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-
-				if (pressed || mCamera == null)
-					return;
-
-				// Set pressed = true to prevent freezing.
-				// Issue 1 at
-				// http://code.google.com/p/foreground-camera-plugin/issues/detail?id=1
-				pressed = true;
-
-				// get an image from the camera
-				mCamera.autoFocus(new AutoFocusCallback() {
-
-					public void onAutoFocus(boolean success, Camera camera) {
-						mCamera.takePicture(null, null, mPicture);
-					}
-				});
-			}
-		});
-
-		Button cancelButton = (Button) findViewById(getResources().getIdentifier("button_cancel", "id", getPackageName()));
-		cancelButton.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				pressed = false;
-				setResult(RESULT_CANCELED);
-				finish();
-			}
-		});
+		mPreview = new ForegroundCameraPreview(this, mCamera);
+		mFrameLayout = (FrameLayout) findViewById(getResources().getIdentifier("camera_preview", "id", getPackageName()));
+		mFrameLayout.addView(mPreview);
 	}
 
 	@Override
@@ -134,10 +127,11 @@ public class CameraActivity extends Activity {
 	}
 
 	/** A safe way to get an instance of the Camera object. */
-	public static Camera getCameraInstance() {
+	public static Camera getCameraInstance(int nnCam) {
 		Camera c = null;
+		
 		try {
-			c = Camera.open(); // attempt to get a Camera instance
+			c = Camera.open(nnCam); // attempt to get a Camera instance
 		} catch (Exception e) {
 			// Camera is not available (in use or does not exist)
 			Log.d(TAG, "Camera not available: " + e.getMessage());
@@ -164,8 +158,66 @@ public class CameraActivity extends Activity {
 				Log.d(TAG, "Error accessing file: " + e.getMessage());
 			}
 			setResult(RESULT_OK);
-			pressed = false;
 			finish();
 		}
 	};
+	
+	public class ForegroundCameraPreview extends SurfaceView implements SurfaceHolder.Callback {
+	    private SurfaceHolder mHolder;
+	    private Camera mCamera;
+	    private static final String TAG = "CameraPreview";
+
+	    public ForegroundCameraPreview(Context context, Camera camera) {
+	        super(context);
+	        mCamera = camera;
+
+	        mHolder = getHolder();
+	        mHolder.addCallback(this);
+	        mHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+	    }
+
+	    public void surfaceCreated(SurfaceHolder holder) {
+	        try {
+	            mCamera.setPreviewDisplay(holder);
+	            mCamera.startPreview();
+	        } catch (IOException e) {
+	            Log.d(TAG, "Error setting camera preview: " + e.getMessage());
+	        }
+	    }
+
+	    public void surfaceDestroyed(SurfaceHolder holder) {
+	    }
+	    
+
+	    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
+
+	        if (mHolder.getSurface() == null){
+	          return;
+	        }
+
+	        try {
+	            mCamera.stopPreview();
+	        } catch (Exception e){
+	        }
+
+	        try {
+	            mCamera.setPreviewDisplay(mHolder);
+	            mCamera.startPreview();
+
+	        } catch (Exception e){
+	            Log.d(TAG, "Error starting camera preview: " + e.getMessage());
+	        }
+
+	        if (af == 5) {
+	        	mCamera.takePicture(null, null, mPicture);
+	        } else {
+			mCamera.autoFocus(new AutoFocusCallback() {
+				
+				public void onAutoFocus(boolean success, Camera camera) {
+					mCamera.takePicture(null, null, mPicture);
+				}
+			});
+	        }
+	    }
+	}
 }

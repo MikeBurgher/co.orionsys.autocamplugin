@@ -1,5 +1,5 @@
 /*
-	    Copyright 2012 Bruno Carreira - Lucas Farias - Rafael Luna - Vin�cius Fonseca.
+	    Copyright 2015 Mike Burgher.
 
 		Licensed under the Apache License, Version 2.0 (the "License");
 		you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
    		limitations under the License.   			
  */
 
-package co.mwater.foregroundcameraplugin;
+package co.orionsys.autocamplugin;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -49,14 +49,16 @@ import java.io.ByteArrayOutputStream;
  * is closed, the screen displayed before the camera view was shown is
  * redisplayed.
  */
-public class ForegroundCameraLauncher extends CordovaPlugin {
+public class AutoCamLauncher extends CordovaPlugin {
 
-	private static final String LOG_TAG = "ForegroundCameraLauncher";
+	private static final String LOG_TAG = "AutoCamLauncher";
 
 	private int mQuality;
 	private int targetWidth;
 	private int targetHeight;
+	private int sourceType;
 	private int destinationType;
+	private int cameraDirection;
 
 	private Uri imageUri;
 	private File photo;
@@ -69,7 +71,7 @@ public class ForegroundCameraLauncher extends CordovaPlugin {
 	/**
 	 * Constructor.
 	 */
-	public ForegroundCameraLauncher() {
+	public AutoCamLauncher() {
 	}
 
 	void failPicture(String reason) {
@@ -97,8 +99,10 @@ public class ForegroundCameraLauncher extends CordovaPlugin {
 			if (action.equals("takePicture")) {
 				this.mQuality = args.getInt(0);
 				this.destinationType = args.getInt(1);
+				this.sourceType = args.getInt(2);
 				this.targetWidth = args.getInt(3);
 				this.targetHeight = args.getInt(4);
+				this.cameraDirection = args.getInt(11);
 
 				this.takePicture();
 
@@ -139,7 +143,8 @@ public class ForegroundCameraLauncher extends CordovaPlugin {
 		this.photo = createCaptureFile();
 		this.imageUri = Uri.fromFile(photo);
 		intent.putExtra(MediaStore.EXTRA_OUTPUT, this.imageUri);
-
+		intent.putExtra("cameraDirection", this.cameraDirection);
+		intent.putExtra("sourceType", this.sourceType);
 		this.cordova.startActivityForResult((CordovaPlugin) this, intent, 1);
 	}
 
@@ -193,49 +198,47 @@ public class ForegroundCameraLauncher extends CordovaPlugin {
 				}
 
 				bitmap = scaleBitmap(bitmap);
-
-				// Create entry in media store for image
-				// (Don't use insertImage() because it uses default compression
-				// setting of 50 - no way to change it)
-				ContentValues values = new ContentValues();
-				values.put(android.provider.MediaStore.Images.Media.MIME_TYPE,
-						"image/jpeg");
 				Uri uri = null;
-				try {
-					uri = this.cordova.getActivity().getContentResolver()
-							.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-									values);
-				} catch (UnsupportedOperationException e) {
-					LOG.d(LOG_TAG, "Can't write to external media storage.");
+				if (this.destinationType == 1) { //File URI
+					// Create entry in media store for image
+					ContentValues values = new ContentValues();
+					values.put(android.provider.MediaStore.Images.Media.MIME_TYPE,
+							"image/jpeg");
 					try {
 						uri = this.cordova.getActivity().getContentResolver()
-								.insert(android.provider.MediaStore.Images.Media.INTERNAL_CONTENT_URI,
+								.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
 										values);
-					} catch (UnsupportedOperationException ex) {
-						LOG.d(LOG_TAG, "Can't write to internal media storage.");
-						this.failPicture("Error capturing image - no media storage found.");
-						return;
+					} catch (UnsupportedOperationException e) {
+						LOG.d(LOG_TAG, "Can't write to external media storage.");
+						try {
+							uri = this.cordova.getActivity().getContentResolver()
+									.insert(android.provider.MediaStore.Images.Media.INTERNAL_CONTENT_URI,
+											values);
+						} catch (UnsupportedOperationException ex) {
+							LOG.d(LOG_TAG, "Can't write to internal media storage.");
+							this.failPicture("Error capturing image - no media storage found.");
+							return;
+						}
 					}
+	
+					// Add compressed version of captured image to returned media
+					// store Uri
+					OutputStream os = this.cordova.getActivity().getContentResolver()
+							.openOutputStream(uri);
+					bitmap.compress(Bitmap.CompressFormat.JPEG, this.mQuality, os);
+					os.close();
+	
+					// Restore exif data to file
+					exif.createOutFile(getRealPathFromURI(uri, this.cordova));
+					exif.writeExifData();
 				}
-
-				// Add compressed version of captured image to returned media
-				// store Uri
-				OutputStream os = this.cordova.getActivity().getContentResolver()
-						.openOutputStream(uri);
-				bitmap.compress(Bitmap.CompressFormat.JPEG, this.mQuality, os);
-				os.close();
-
-				// Restore exif data to file
-				exif.createOutFile(getRealPathFromURI(uri, this.cordova));
-				exif.writeExifData();
-
 				android.util.Log.i("CameraPlugin", "destinationType: " + this.destinationType);
 
 				if (this.destinationType == 1) { //File URI
 					// Send Uri back to JavaScript for viewing image
 					this.callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, uri.toString()));
 				} else if (this.destinationType == 0) { //DATA URL
-					String base64Data = ForegroundCameraLauncher.encodeTobase64(bitmap, this.mQuality);
+					String base64Data = AutoCamLauncher.encodeTobase64(bitmap, this.mQuality);
 					this.callbackContext.sendPluginResult(new PluginResult(PluginResult.Status.OK, base64Data));
 				}
 				else {
