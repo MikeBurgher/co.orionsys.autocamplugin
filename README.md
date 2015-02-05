@@ -10,7 +10,7 @@ Plugin ID: co.orionsys.autocamplugin
 
 ### CLI Installation
 	
-cordova plugin add co.orionsys.autocamplugin
+cordova plugin add https://github.com/MikeBurgher/co.orionsys.autocamplugin
 
 ### Description
 
